@@ -1,0 +1,8 @@
+{$WIKIPROOF_DOMAIN::80} {
+	encode gzip zstd
+
+	reverse_proxy wikiproof:8000 {
+		header_up X-Real-IP {remote_host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}

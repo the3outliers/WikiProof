@@ -1,0 +1,39 @@
+services:
+  wikiproof:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wikiproof-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DB_PATH=/app/data/wikiproof.db
+      - BENCHMARK_RESULTS_PATH=/app/data/benchmark_results.json
+      - BACKEND_HOST=0.0.0.0
+      - BACKEND_PORT=8000
+    expose:
+      - "8000"
+    volumes:
+      - ./data:/app/data
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: wikiproof-caddy
+    restart: unless-stopped
+    depends_on:
+      - wikiproof
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    environment:
+      - WIKIPROOF_DOMAIN=${WIKIPROOF_DOMAIN:-:80}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
