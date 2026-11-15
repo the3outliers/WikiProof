@@ -20,6 +20,7 @@ _TOPIC_STEMS: list[tuple[str, list[str]]] = [
     ("Russia–Ukraine war", [
         "Ukrain", "Kremlin", "Putin", "Zelensk", "Crimea", "Donbas", "Donetsk", "Luhansk",
         "Mariupol", "Bucha", "Kherson", "Zaporizh", "Lukashenk", "Russo-Ukrain",
+        "special military operation", "Spezialoperation", "erityisoperaatio", "specialoperation",
         "Kreml", "Venäj", "Ryssland",
         "Украин", "Кремл", "Путин", "Зеленск", "Крым", "Донбасс", "Донецк", "Луганск",
         "Мариупол", "Буча", "Херсон", "Запорож", "Лукашенк", "спецоперац",
@@ -73,31 +74,69 @@ _WHOLE_WORDS: list[tuple[str, list[str]]] = [
 ]
 
 
-def _compile() -> list[tuple[str, re.Pattern[str]]]:
+# Terms so common in ordinary articles (place lists, biographies, every article on
+# Russian Wikipedia) that they only count when they appear in the article TITLE.
+_TITLE_ONLY: list[tuple[str, list[str]]] = [
+    ("Russia–Ukraine war", ["Russia", "Russian", "Russland", "Россия", "России", "Российск", "Ryssland", "Venäj"]),
+    ("Authoritarian states & conflicts", ["Taiwan", "Тайван", "Hong Kong", "Belarus", "Беларус", "Белорусс"]),
+]
+
+
+def _alts(terms: list[str]) -> str:
+    return "|".join(re.escape(t) for t in sorted(terms, key=len, reverse=True))
+
+
+def _compile(title_only_terms: set[str]) -> list[tuple[str, re.Pattern[str]]]:
     compiled: list[tuple[str, re.Pattern[str]]] = []
     for label, stems in _TOPIC_STEMS:
-        alts = "|".join(re.escape(s) for s in sorted(stems, key=len, reverse=True))
-        compiled.append((label, re.compile(rf"(?<!\w)(?:{alts})", re.IGNORECASE)))
+        stems = [s for s in stems if s not in title_only_terms]
+        if not stems:
+            continue
+        compiled.append((label, re.compile(rf"(?<!\w)(?:{_alts(stems)})", re.IGNORECASE)))
     for label, words in _WHOLE_WORDS:
-        alts = "|".join(re.escape(w) for w in words)
+        words = [w for w in words if w not in title_only_terms]
+        if not words:
+            continue
         # Case-sensitive: acronyms like NATO/IDF must not match ordinary words.
-        compiled.append((label, re.compile(rf"(?<!\w)(?:{alts})(?!\w)")))
+        compiled.append((label, re.compile(rf"(?<!\w)(?:{_alts(words)})(?!\w)")))
     return compiled
 
 
-_PATTERNS = _compile()
+_TITLE_ONLY_TERMS = {t for _, terms in _TITLE_ONLY for t in terms}
+_TEXT_PATTERNS = _compile(_TITLE_ONLY_TERMS)
+_TITLE_PATTERNS = _compile(set()) + [
+    (label, re.compile(rf"(?<!\w)(?:{_alts(terms)})", re.IGNORECASE)) for label, terms in _TITLE_ONLY
+]
 
 
-def detect_sensitive_topics(title: str, added_text: str = "", deleted_text: str = "") -> dict[str, list[str]]:
-    """Return {topic_label: [matched terms...]} for the title and changed text.
+def changed_segments(revision: dict) -> list[str]:
+    """The words that actually changed in a revision (MediaWiki inline diff highlights).
 
+    Falls back to whole changed lines when highlights are unavailable.
+    """
+    segs = list(revision.get("added_highlights") or []) + list(revision.get("deleted_highlights") or [])
+    if not segs:
+        segs = list(revision.get("added_lines") or []) + list(revision.get("deleted_lines") or [])
+    return [s for s in segs if s and s.strip()]
+
+
+def detect_sensitive_topics(title: str, changed: list[str] | None = None) -> dict[str, list[str]]:
+    """Return {topic_label: [matched terms...]} for the title and the changed wording.
+
+    Only the article title and the words that actually changed are searched, so a
+    sensitive word elsewhere in an edited paragraph does not trigger review.
     Empty dict means the edit does not touch a politically sensitive topic.
     """
-    haystack = "\n".join(part for part in (title, added_text, deleted_text) if part)
-    if not haystack:
-        return {}
     found: dict[str, list[str]] = {}
-    for label, pattern in _PATTERNS:
+    _scan(title or "", _TITLE_PATTERNS, found)
+    _scan("\n".join(changed or []), _TEXT_PATTERNS, found)
+    return found
+
+
+def _scan(haystack: str, patterns: list[tuple[str, re.Pattern[str]]], found: dict[str, list[str]]) -> None:
+    if not haystack:
+        return
+    for label, pattern in patterns:
         for m in pattern.finditer(haystack):
             term = m.group(0)
             terms = found.setdefault(label, [])
@@ -105,4 +144,3 @@ def detect_sensitive_topics(title: str, added_text: str = "", deleted_text: str 
                 terms.append(term)
             if len(terms) >= 5:
                 break
-    return found

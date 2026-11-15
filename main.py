@@ -38,7 +38,7 @@ from database import (
     save_live_event,
 )
 from heuristics import score_revision
-from topics import detect_sensitive_topics
+from topics import changed_segments, detect_sensitive_topics
 from llm_analyzer import analyze_revision
 from wikimedia_client import (
     fetch_revision_details,
@@ -158,13 +158,12 @@ async def _sse_ingestion_worker() -> None:
                         elif (
                             settings.sensitive_topic_llm_enabled
                             and (now_mono - last_topic_llm_ts) >= settings.sensitive_topic_llm_interval_seconds
-                            and (revision.get("added_chars", 0) + revision.get("deleted_chars", 0))
-                            >= settings.sensitive_topic_min_changed_chars
                         ):
-                            topics = detect_sensitive_topics(
-                                revision.get("title", ""),
-                                revision.get("added_text", ""),
-                                revision.get("deleted_text", ""),
+                            changed = changed_segments(revision)
+                            topics = (
+                                detect_sensitive_topics(revision.get("title", ""), changed)
+                                if sum(len(s) for s in changed) >= settings.sensitive_topic_min_changed_chars
+                                else {}
                             )
                             if topics:
                                 last_topic_llm_ts = now_mono
