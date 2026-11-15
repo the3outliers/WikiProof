@@ -29,6 +29,14 @@ ALLOWED_TECHNIQUES = [
     "Fabricated Authority",
     "Source Laundering",
 ]
+PROPAGANDA_TECHNIQUES = [
+    "Whitewashing",
+    "False Equivalence",
+    "Euphemism",
+    "Fake Sourcing",
+    "Demonization",
+    "Historical Revisionism",
+]
 
 SYSTEM_PROMPT = """You are WikiProof, an impartial Wikipedia forensic threat-intelligence analyst.
 Evaluate whether a Wikipedia article revision represents covert manipulation, coordinated influence,
@@ -45,14 +53,36 @@ Return STRICT JSON ONLY with these exact keys:
   "confidence": <float between 0.0 and 1.0>,
   "techniques": [<subset of ["Whitewashing", "Loaded Framing", "Fabricated Authority", "Source Laundering"]; MUST be [] if verdict is "Benign">],
   "highlighted_quote": "<exact verbatim substring copied from the ADDED or DELETED diff text that most strongly drives your verdict, or empty string if trivial>",
-  "explanation": "<exactly 2 clear, plain-English sentences explaining the verdict to an everyday reader>"
+  "diff_summary_en": "<one or two concise plain-English sentences describing the concrete changes; translate or paraphrase non-English changes, and do not assess intent or risk>",
+  "explanation": "<exactly 2 clear, plain-English sentences explaining the verdict to an everyday reader>",
+  "propaganda": {
+    "detected": <true | false>,
+    "techniques": [<subset of ["Whitewashing", "False Equivalence", "Euphemism", "Fake Sourcing", "Demonization", "Historical Revisionism"]; MUST be [] if detected is false>],
+    "narrative": "<one neutral sentence naming the viewpoint the change advances, e.g. 'Recasts the invasion as a defensive operation'; empty string if not detected>",
+    "favors": "<the government, movement, party, company or person the framing benefits; empty string if unclear or not detected>"
+  }
 }
 
 Technique definitions:
 - "Whitewashing": Removing sourced criticism, controversies, negative history, or unfavorable facts without neutral replacement.
 - "Loaded Framing": Injecting biased, promotional, peacock, or emotionally slanted wording presented as encyclopedic fact.
 - "Fabricated Authority": Asserting sweeping, extraordinary, or self-serving claims without reliable citations or with bogus/misrepresented credentials.
-- "Source Laundering": Injecting low-reliability, partisan, self-published, or promotional external domains to create an illusion of verification."""
+- "Source Laundering": Injecting low-reliability, partisan, self-published, or promotional external domains to create an illusion of verification.
+
+Propaganda assessment ("propaganda" object):
+Set "detected" to true only when the change itself pushes a political, state, or ideological narrative in Wikipedia's
+voice, for any side. Judge the text that changed, never the editor's nationality, language, or the article's subject.
+Attributed viewpoints ("According to the Kremlin, ..."), neutrally summarized official positions, routine NPOV
+disputes, and factual updates are NOT propaganda. If verdict is "Benign", "detected" MUST be false.
+"sensitive_topics_matched" in the context only explains why this edit was selected for review; touching a
+sensitive topic is NOT evidence of propaganda, and most such edits are routine.
+Propaganda technique definitions:
+- "Whitewashing": Removing or softening documented abuses, crimes, or criticism of an actor.
+- "False Equivalence": Presenting fringe or state-sponsored claims as equal to well-established facts ("some say...").
+- "Euphemism": Replacing plain descriptions with sanitized terms (e.g. "special operation" for war, "relocation" for deportation).
+- "Fake Sourcing": Backing claims with state media, propaganda outlets, or sources that do not support the claim.
+- "Demonization": Dehumanizing or extreme labels for a group, country, or person stated as fact.
+- "Historical Revisionism": Rewriting established historical events, borders, dates, or responsibility."""
 
 
 def _truncate_text(text: str, limit: int = 3000) -> str:
@@ -92,6 +122,7 @@ def _build_user_prompt(
             "is_anonymous": user_profile.get("is_anonymous", False),
             "is_temp": user_profile.get("is_temp", False),
         },
+        "sensitive_topics_matched": revision.get("sensitive_topics") or {},
         "heuristics": {
             "score": heuristics.get("score"),
             "risk_tier": heuristics.get("risk_tier"),
@@ -163,6 +194,25 @@ def _select_verbatim_quote(candidate: str, revision: dict[str, Any]) -> str:
     return ""
 
 
+def _normalize_propaganda(raw: Any, verdict: str) -> dict[str, Any]:
+    """Coerce the model's propaganda block into a stable shape."""
+    raw = raw if isinstance(raw, dict) else {}
+    techniques = raw.get("techniques") or []
+    if not isinstance(techniques, list):
+        techniques = []
+    techniques = list(dict.fromkeys(t for t in techniques if t in PROPAGANDA_TECHNIQUES))
+    detected = raw.get("detected") is True and verdict != "Benign"
+    if not detected:
+        techniques = []
+    return {
+        "assessed": True,
+        "detected": detected,
+        "techniques": techniques,
+        "narrative": str(raw.get("narrative") or "").strip()[:300] if detected else "",
+        "favors": str(raw.get("favors") or "").strip()[:120] if detected else "",
+    }
+
+
 def _normalize_llm_output(
     raw_obj: dict[str, Any],
     revision: dict[str, Any],
@@ -190,6 +240,7 @@ def _normalize_llm_output(
         techniques = []
 
     quote = _select_verbatim_quote(str(raw_obj.get("highlighted_quote") or ""), revision)
+    diff_summary_en = str(raw_obj.get("diff_summary_en") or "").strip()[:600]
     explanation = str(raw_obj.get("explanation") or "").strip()
     if not explanation:
         explanation = (
@@ -202,7 +253,9 @@ def _normalize_llm_output(
         "confidence": confidence,
         "techniques": techniques,
         "highlighted_quote": quote,
+        "diff_summary_en": diff_summary_en,
         "explanation": explanation,
+        "propaganda": _normalize_propaganda(raw_obj.get("propaganda"), verdict),
         "provider": provider,
         "model": model,
         "latency_ms": latency_ms,
@@ -266,7 +319,9 @@ def _heuristic_abstention_fallback(
         "confidence": confidence,
         "techniques": techniques,
         "highlighted_quote": quote,
+        "diff_summary_en": "",
         "explanation": f"{s1} {s2}",
+        "propaganda": {"assessed": False, "detected": False, "techniques": [], "narrative": "", "favors": ""},
         "provider": "heuristic_fallback",
         "model": "deterministic-heuristics-v1",
         "latency_ms": 0,
@@ -328,13 +383,26 @@ async def _call_gemini_fallback(user_prompt: str) -> dict[str, Any]:
                             "items": {"type": "STRING"},
                         },
                         "highlighted_quote": {"type": "STRING"},
+                        "diff_summary_en": {"type": "STRING"},
                         "explanation": {"type": "STRING"},
+                        "propaganda": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "detected": {"type": "BOOLEAN"},
+                                "techniques": {"type": "ARRAY", "items": {"type": "STRING"}},
+                                "narrative": {"type": "STRING"},
+                                "favors": {"type": "STRING"},
+                            },
+                            "required": ["detected", "techniques", "narrative", "favors"],
+                        },
                     },
                     "required": [
+                        "propaganda",
                         "verdict",
                         "confidence",
                         "techniques",
                         "highlighted_quote",
+                        "diff_summary_en",
                         "explanation",
                     ],
                 },

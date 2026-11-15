@@ -5,7 +5,7 @@ WikiProof is a real-time Wikipedia edit intelligence and covert influence-operat
 ## System Architecture
 
 ```
-Wikimedia EventStreams SSE (enwiki, fiwiki, dewiki, ruwiki)
+Wikimedia EventStreams SSE (enwiki, fiwiki, dewiki, ruwiki, svwiki)
         │  [type=edit, ns=0, bot=false]
         ▼
   wikimedia_client.py  ◄── MediaWiki Action API (query revisions + compare diff + users)
@@ -59,6 +59,7 @@ Final score is clamped to `[0, 100]`.
 - `confidence`: `float` (`0.0–1.0`)
 - `techniques`: subset of `["Whitewashing", "Loaded Framing", "Fabricated Authority", "Source Laundering"]` (always `[]` if `Benign`)
 - `highlighted_quote`: exact verbatim substring from the diff driving the verdict
+- `diff_summary_en`: concise English summary of the concrete changes, including paraphrase of non-English text
 - `explanation`: 2-sentence plain-English explanation for an everyday reader
 
 ## REST & UI Endpoints (`main.py`)
@@ -67,6 +68,7 @@ Final score is clamped to `[0, 100]`.
 - `GET /api/health` — Service health, SSE stream stats, SQLite counts, and LLM router status.
 - `GET /api/live-feed?limit=50&wiki=enwiki&min_score=0` — Latest scored edits from the Wikimedia SSE stream.
 - `POST /api/inspect` — Accepts `{ "url": "..." }` or `{ "wiki_domain": "...", "rev_id": ... }`, runs full pipeline, caches and returns the forensic dossier.
+- `POST /api/english-summary` — Retries AI analysis for a cached revision and saves its English diff summary without replacing the existing verdict.
 - `GET /api/presets` — Returns 3 cached real examples (`true_positive`, `hard_negative`, `uncertain`).
 - `GET /api/network?min_score=0&limit=120` — Returns `Editor -> Article -> External Domain` graph nodes and edges.
 - `GET /api/benchmark?threshold=50` — Returns benchmark cases, metrics, threshold sweep, and dynamically recomputed confusion matrix.

@@ -329,6 +329,51 @@ def get_cached_revision(
         return _row_to_dossier(row)
 
 
+def get_cached_analysis_inputs(
+    wiki_domain: str,
+    rev_id: int,
+    db_path: str | None = None,
+) -> dict[str, Any] | None:
+    """Return stored revision text and analysis context for retrying an AI summary."""
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT * FROM revisions WHERE wiki_domain = ? AND rev_id = ?",
+            (wiki_domain, int(rev_id)),
+        ).fetchone()
+        if not row:
+            return None
+        dossier = _row_to_dossier(row)
+        return {
+            "revision": json.loads(row["revision_detail_json"]),
+            "user_profile": dossier["user_profile"],
+            "heuristics": dossier["heuristics"],
+            "llm_analysis": dossier["llm_analysis"],
+        }
+
+
+def save_cached_diff_summary(
+    wiki_domain: str,
+    rev_id: int,
+    summary: str,
+    db_path: str | None = None,
+) -> bool:
+    """Persist an English diff summary without replacing the existing verdict."""
+    with get_connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT llm_analysis_json FROM revisions WHERE wiki_domain = ? AND rev_id = ?",
+            (wiki_domain, int(rev_id)),
+        ).fetchone()
+        if not row:
+            return False
+        llm_analysis = json.loads(row["llm_analysis_json"])
+        llm_analysis["diff_summary_en"] = summary
+        conn.execute(
+            "UPDATE revisions SET llm_analysis_json = ? WHERE wiki_domain = ? AND rev_id = ?",
+            (json.dumps(llm_analysis), wiki_domain, int(rev_id)),
+        )
+        return True
+
+
 def save_live_event(
     revision: dict[str, Any],
     heuristics: dict[str, Any],
@@ -470,14 +515,21 @@ def get_live_feed(
     limit: int = 50,
     wiki: str | None = None,
     min_score: int = 0,
+    propaganda_only: bool = False,
     db_path: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Return latest scored live edits from SQLite."""
-    clauses = ["risk_score >= ?"]
+    """Return latest scored live edits from SQLite.
+
+    The AI propaganda assessment lives in revisions.llm_analysis_json (written for
+    both stream auto-analysis and manual inspection), so it is joined in here.
+    """
+    clauses = ["le.risk_score >= ?"]
     params: list[Any] = [int(min_score)]
     if wiki:
-        clauses.append("wiki = ?")
+        clauses.append("le.wiki = ?")
         params.append(wiki)
+    if propaganda_only:
+        clauses.append("json_extract(rv.llm_analysis_json, '$.propaganda.detected') = 1")
 
     where_sql = " AND ".join(clauses)
     params.append(max(1, min(limit, 200)))
@@ -485,9 +537,14 @@ def get_live_feed(
     with get_connection(db_path) as conn:
         rows = conn.execute(
             f"""
-            SELECT * FROM live_events
+            SELECT le.*,
+                   json_extract(rv.llm_analysis_json, '$.propaganda') AS propaganda_json,
+                   json_extract(rv.llm_analysis_json, '$.verdict') AS rv_verdict
+            FROM live_events le
+            LEFT JOIN revisions rv
+              ON rv.wiki_domain = le.wiki_domain AND rv.rev_id = le.rev_id
             WHERE {where_sql}
-            ORDER BY id DESC
+            ORDER BY le.id DESC
             LIMIT ?
             """,
             params,
@@ -511,9 +568,49 @@ def get_live_feed(
                 "added_domains": json.loads(r["added_domains_json"]),
                 "triggered_signals": json.loads(r["triggered_signals_json"]),
                 "guardrails_applied": json.loads(r["guardrails_json"]),
-                "verdict": r["verdict"],
+                "verdict": r["verdict"] or r["rv_verdict"],
                 "confidence": r["confidence"],
                 "explanation": r["explanation"],
+                "propaganda": json.loads(r["propaganda_json"]) if r["propaganda_json"] else None,
+            }
+        )
+    return results
+
+
+def get_propaganda_flagged(limit: int = 100, db_path: str | None = None) -> list[dict[str, Any]]:
+    """Return analyzed revisions whose AI assessment detected a propaganda narrative."""
+    with get_connection(db_path) as conn:
+        rows = conn.execute(
+            """
+            SELECT wiki, wiki_domain, rev_id, title, user, timestamp, diff_url,
+                   risk_score, source, created_at, llm_analysis_json
+            FROM revisions
+            WHERE json_extract(llm_analysis_json, '$.propaganda.detected') = 1
+            ORDER BY created_at DESC
+            LIMIT ?
+            """,
+            (max(1, min(limit, 500)),),
+        ).fetchall()
+
+    results: list[dict[str, Any]] = []
+    for r in rows:
+        analysis = json.loads(r["llm_analysis_json"])
+        results.append(
+            {
+                "wiki": r["wiki"],
+                "wiki_domain": r["wiki_domain"],
+                "rev_id": r["rev_id"],
+                "title": r["title"],
+                "user": r["user"],
+                "timestamp": r["timestamp"],
+                "diff_url": r["diff_url"],
+                "risk_score": r["risk_score"],
+                "source": r["source"],
+                "analyzed_at": r["created_at"],
+                "verdict": analysis.get("verdict"),
+                "confidence": analysis.get("confidence"),
+                "highlighted_quote": analysis.get("highlighted_quote"),
+                "propaganda": analysis.get("propaganda"),
             }
         )
     return results

@@ -1,0 +1,33 @@
+# Hostinger VPS (Docker template) deployment.
+# Hostinger's VPS already runs Traefik on ports 80/443 with Let's Encrypt,
+# so this file routes WikiProof through it instead of running Caddy.
+# Usage on the VPS:  docker compose -f docker-compose.hostinger.yml up -d --build
+services:
+  wikiproof:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: wikiproof-app
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - DB_PATH=/app/data/wikiproof.db
+      - BENCHMARK_RESULTS_PATH=/app/data/benchmark_results.json
+      - BACKEND_HOST=0.0.0.0
+      - BACKEND_PORT=8000
+    volumes:
+      - ./data:/app/data
+    labels:
+      - traefik.enable=true
+      - traefik.http.services.wikiproof.loadbalancer.server.port=8000
+      # Separate routers so each hostname gets its own certificate; a domain whose
+      # DNS isn't pointed here yet can't block the others.
+      - traefik.http.routers.wikiproof-vps.entrypoints=websecure
+      - traefik.http.routers.wikiproof-vps.rule=Host(`wikiproof.srv2160244.hstgr.cloud`)
+      - traefik.http.routers.wikiproof-vps.tls.certresolver=letsencrypt
+      - traefik.http.routers.wikiproof-vps.service=wikiproof
+      - traefik.http.routers.wikiproof-tech.entrypoints=websecure
+      - traefik.http.routers.wikiproof-tech.rule=Host(`wikiproof.tech`) || Host(`www.wikiproof.tech`)
+      - traefik.http.routers.wikiproof-tech.tls.certresolver=letsencrypt
+      - traefik.http.routers.wikiproof-tech.service=wikiproof

@@ -25,16 +25,20 @@ from config import get_logger, settings
 from database import (
     find_cross_wiki_bursts,
     get_benchmark_report,
+    get_cached_analysis_inputs,
     get_cached_revision,
     get_db_stats,
     get_live_feed,
+    get_propaganda_flagged,
     get_network_graph,
     get_presets,
     init_db,
     save_analyzed_revision,
+    save_cached_diff_summary,
     save_live_event,
 )
 from heuristics import score_revision
+from topics import detect_sensitive_topics
 from llm_analyzer import analyze_revision
 from wikimedia_client import (
     fetch_revision_details,
@@ -72,6 +76,13 @@ class InspectRequest(BaseModel):
     force_refresh: bool = Field(default=False, description="Bypass SQLite cache and re-analyze")
 
 
+class EnglishSummaryRequest(BaseModel):
+    """Request payload for generating an English summary of a cached revision diff."""
+
+    wiki_domain: str = Field(description="Wikipedia domain, e.g. sv.wikipedia.org")
+    rev_id: int = Field(gt=0, description="MediaWiki revision ID")
+
+
 async def run_full_forensic_pipeline(
     wiki_domain: str,
     rev_id: int,
@@ -104,7 +115,10 @@ async def _sse_ingestion_worker() -> None:
     """Background worker consuming Wikimedia EventStreams SSE and scoring edits."""
     stream_state.active = True
     last_llm_ts = 0.0
+    last_topic_llm_ts = 0.0
     semaphore = asyncio.Semaphore(2)
+    pending_tasks: set[asyncio.Task[None]] = set()
+    MAX_PENDING_EVENTS = 20
 
     async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
         async for event in stream_recent_changes(stop_event=stream_state.stop_event):
@@ -120,7 +134,7 @@ async def _sse_ingestion_worker() -> None:
             wiki_domain = wiki_to_domain(wiki)
 
             async def _process_one(w_domain: str, r_id: int) -> None:
-                nonlocal last_llm_ts
+                nonlocal last_llm_ts, last_topic_llm_ts
                 async with semaphore:
                     try:
                         revision = await fetch_revision_details(w_domain, r_id, client=client)
@@ -134,11 +148,34 @@ async def _sse_ingestion_worker() -> None:
 
                         llm_analysis: dict[str, Any] | None = None
                         now_mono = time.monotonic()
+                        run_llm = False
                         if (
                             heuristics["score"] >= settings.llm_auto_analyze_threshold
                             and (now_mono - last_llm_ts) >= 12.0
                         ):
                             last_llm_ts = now_mono
+                            run_llm = True
+                        elif (
+                            settings.sensitive_topic_llm_enabled
+                            and (now_mono - last_topic_llm_ts) >= settings.sensitive_topic_llm_interval_seconds
+                            and (revision.get("added_chars", 0) + revision.get("deleted_chars", 0))
+                            >= settings.sensitive_topic_min_changed_chars
+                        ):
+                            topics = detect_sensitive_topics(
+                                revision.get("title", ""),
+                                revision.get("added_text", ""),
+                                revision.get("deleted_text", ""),
+                            )
+                            if topics:
+                                last_topic_llm_ts = now_mono
+                                run_llm = True
+                                revision["sensitive_topics"] = topics
+                                logger.info(
+                                    "Sensitive-topic AI review %s/%s '%s' (score %s): %s",
+                                    w_domain, r_id, revision.get("title"), heuristics["score"], topics,
+                                )
+
+                        if run_llm:
                             llm_analysis = await analyze_revision(revision, user_profile, heuristics)
                             save_analyzed_revision(
                                 revision=revision,
@@ -154,8 +191,14 @@ async def _sse_ingestion_worker() -> None:
                         stream_state.last_error = str(exc)
                         logger.debug("Live event processing skipped for %s/%s: %s", w_domain, r_id, exc)
 
-            # Fire-and-forget bounded task so SSE stream never blocks
-            asyncio.create_task(_process_one(wiki_domain, int(rev_id)))
+            # Fire-and-forget bounded task so SSE stream never blocks. When the
+            # backlog is full (e.g. while backing off a Wikipedia 429), sample the
+            # firehose instead of queueing unbounded work.
+            if len(pending_tasks) >= MAX_PENDING_EVENTS:
+                continue
+            task = asyncio.create_task(_process_one(wiki_domain, int(rev_id)))
+            pending_tasks.add(task)
+            task.add_done_callback(pending_tasks.discard)
 
 
 @asynccontextmanager
@@ -236,13 +279,21 @@ async def live_feed(
     limit: int = Query(default=50, ge=1, le=200),
     wiki: str | None = Query(default=None),
     min_score: int = Query(default=0, ge=0, le=100),
+    propaganda: bool = Query(default=False, description="Only edits the AI flagged as propaganda"),
 ) -> dict[str, Any]:
     """Return latest scored edits ingested from the Wikimedia SSE stream."""
-    events = get_live_feed(limit=limit, wiki=wiki, min_score=min_score)
+    events = get_live_feed(limit=limit, wiki=wiki, min_score=min_score, propaganda_only=propaganda)
     return {
         "count": len(events),
         "events": events,
     }
+
+
+@app.get("/api/propaganda")
+async def propaganda_flagged(limit: int = Query(default=100, ge=1, le=500)) -> dict[str, Any]:
+    """Return every analyzed revision whose AI assessment detected a propaganda narrative."""
+    items = get_propaganda_flagged(limit=limit)
+    return {"count": len(items), "items": items}
 
 
 @app.post("/api/inspect")
@@ -270,6 +321,33 @@ async def inspect_revision(payload: InspectRequest) -> dict[str, Any]:
     except Exception as exc:
         logger.exception("Failed to inspect %s/%s", wiki_domain, rev_id)
         raise HTTPException(status_code=502, detail=f"Upstream analysis error: {exc}") from exc
+
+
+@app.post("/api/english-summary")
+async def generate_english_summary(payload: EnglishSummaryRequest) -> dict[str, str]:
+    """Retry AI analysis for a cached revision and persist its English diff summary."""
+    inputs = get_cached_analysis_inputs(payload.wiki_domain, payload.rev_id)
+    if inputs is None:
+        raise HTTPException(status_code=404, detail="Revision is not available in the local analysis cache.")
+
+    existing_summary = inputs["llm_analysis"].get("diff_summary_en")
+    if existing_summary:
+        return {"diff_summary_en": existing_summary}
+
+    llm_analysis = await analyze_revision(
+        inputs["revision"],
+        inputs["user_profile"],
+        inputs["heuristics"],
+    )
+    summary = llm_analysis.get("diff_summary_en")
+    if not summary:
+        raise HTTPException(
+            status_code=503,
+            detail="AI summary unavailable. Verify HOSTINGER_AI_KEY or configure GEMINI_API_KEY, then retry.",
+        )
+    if not save_cached_diff_summary(payload.wiki_domain, payload.rev_id, summary):
+        raise HTTPException(status_code=404, detail="Revision is no longer available in the local analysis cache.")
+    return {"diff_summary_en": summary}
 
 
 @app.get("/api/presets")

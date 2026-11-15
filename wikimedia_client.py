@@ -1,7 +1,7 @@
 """Wikimedia EventStreams SSE consumer and MediaWiki Action API client.
 
 Connects to Wikimedia's live recentchange SSE stream (filtered to edits in
-article namespace 0 by non-bots across enwiki, fiwiki, dewiki, and ruwiki),
+article namespace 0 by non-bots across configured Wikipedia language editions),
 parses revision URLs, fetches exact revision diffs via MediaWiki compare API,
 extracts added/deleted lines and newly injected external URLs/domains, and
 retrieves editor account age, edit count, and groups.
@@ -28,6 +28,7 @@ WIKI_TO_DOMAIN: dict[str, str] = {
     "fiwiki": "fi.wikipedia.org",
     "dewiki": "de.wikipedia.org",
     "ruwiki": "ru.wikipedia.org",
+    "svwiki": "sv.wikipedia.org",
 }
 
 DOMAIN_TO_WIKI: dict[str, str] = {v: k for k, v in WIKI_TO_DOMAIN.items()}
@@ -205,20 +206,43 @@ def _parse_compare_html(diff_html: str) -> dict[str, Any]:
     }
 
 
+_API_MAX_RETRIES = 3
+_api_cooldown_until = 0.0
+
+
 async def _api_get(
     client: httpx.AsyncClient,
     wiki_domain: str,
     params: dict[str, Any],
 ) -> dict[str, Any]:
     """Execute a logged GET request to the MediaWiki Action API."""
+    global _api_cooldown_until
     endpoint = f"https://{wiki_domain}/w/api.php"
     full_params = {**params, "format": "json"}
-    logger.info("MediaWiki API GET %s params=%s", endpoint, full_params)
-    response = await client.get(
-        endpoint,
-        params=full_params,
-        headers={"User-Agent": settings.wiki_user_agent},
-    )
+    loop = asyncio.get_running_loop()
+    for attempt in range(_API_MAX_RETRIES + 1):
+        # Honor any shared cooldown set after a 429 so all workers back off together.
+        wait = _api_cooldown_until - loop.time()
+        if wait > 0:
+            await asyncio.sleep(wait)
+        logger.info("MediaWiki API GET %s params=%s", endpoint, full_params)
+        response = await client.get(
+            endpoint,
+            params=full_params,
+            headers={"User-Agent": settings.wiki_user_agent},
+        )
+        if response.status_code not in (429, 503) or attempt == _API_MAX_RETRIES:
+            break
+        try:
+            retry_after = float(response.headers.get("Retry-After", ""))
+        except ValueError:
+            retry_after = 2.0 * (2**attempt)
+        retry_after = min(max(retry_after, 1.0), 30.0)
+        _api_cooldown_until = max(_api_cooldown_until, loop.time() + retry_after)
+        logger.warning(
+            "MediaWiki API %s on %s; backing off %.1fs (attempt %d)",
+            response.status_code, wiki_domain, retry_after, attempt + 1,
+        )
     response.raise_for_status()
     data = response.json()
     if "error" in data:
@@ -463,7 +487,7 @@ async def stream_recent_changes(stop_event: asyncio.Event | None = None) -> Asyn
     - type == "edit"
     - namespace == 0 (Main / Article namespace)
     - bot == False
-    - wiki in settings.wiki_stream_wikis (enwiki, fiwiki, dewiki, ruwiki)
+    - wiki in settings.wiki_stream_wikis
     """
     backoff = 2.0
     while stop_event is None or not stop_event.is_set():

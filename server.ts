@@ -19,8 +19,13 @@ function getArg(flag: string, fallback: string): string {
 const port = getArg('--port', process.env.PORT || '3000');
 const host = getArg('--host', '0.0.0.0');
 
-const venvPython = path.resolve(process.cwd(), '.venv/bin/python');
-const pythonBin = existsSync(venvPython) ? venvPython : 'python3';
+const venvPythonCandidates = [
+  path.resolve(process.cwd(), '.venv', 'Scripts', 'python.exe'),
+  path.resolve(process.cwd(), '.venv', 'Scripts', 'python'),
+  path.resolve(process.cwd(), '.venv', 'bin', 'python'),
+  path.resolve(process.cwd(), '.venv', 'bin', 'python3'),
+];
+const pythonBin = venvPythonCandidates.find((candidate) => existsSync(candidate)) ?? (process.env.PYTHON ?? 'python');
 
 const child = spawn(
   pythonBin,

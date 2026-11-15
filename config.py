@@ -60,7 +60,7 @@ class Settings:
         default_factory=lambda: _clean_url("HOSTINGER_BASE_URL", "https://router.hostinger.com/v1")
     )
     hostinger_model_slug: str = field(
-        default_factory=lambda: os.getenv("HOSTINGER_MODEL_SLUG", "openai/gpt-4o-mini").strip()
+        default_factory=lambda: os.getenv("HOSTINGER_MODEL_SLUG", "claude-haiku-5.5").strip()
     )
 
     gemini_api_key: str = field(default_factory=lambda: os.getenv("GEMINI_API_KEY", "").strip())
@@ -76,13 +76,26 @@ class Settings:
     )
     wiki_stream_url: str = "https://stream.wikimedia.org/v2/stream/recentchange"
     wiki_stream_wikis: set[str] = field(
-        default_factory=lambda: _env_set("WIKI_STREAM_WIKIS", {"enwiki", "fiwiki", "dewiki", "ruwiki"})
+        default_factory=lambda: _env_set(
+            "WIKI_STREAM_WIKIS", {"enwiki", "fiwiki", "dewiki", "ruwiki", "svwiki"}
+        )
     )
 
     risk_threshold_default: int = field(default_factory=lambda: _env_int("RISK_THRESHOLD_DEFAULT", 50))
     risk_threshold_uncertain: int = field(default_factory=lambda: _env_int("RISK_THRESHOLD_UNCERTAIN", 30))
     risk_threshold_suspicious: int = field(default_factory=lambda: _env_int("RISK_THRESHOLD_SUSPICIOUS", 60))
     llm_auto_analyze_threshold: int = field(default_factory=lambda: _env_int("LLM_AUTO_ANALYZE_THRESHOLD", 30))
+    # Edits touching politically sensitive topics (see topics.py) are sent to AI
+    # propaganda review regardless of risk score, on their own rate budget.
+    sensitive_topic_llm_enabled: bool = field(
+        default_factory=lambda: _env_bool("SENSITIVE_TOPIC_LLM_ENABLED", True)
+    )
+    sensitive_topic_llm_interval_seconds: int = field(
+        default_factory=lambda: _env_int("SENSITIVE_TOPIC_LLM_INTERVAL_SECONDS", 6)
+    )
+    sensitive_topic_min_changed_chars: int = field(
+        default_factory=lambda: _env_int("SENSITIVE_TOPIC_MIN_CHANGED_CHARS", 40)
+    )
     cross_wiki_window_minutes: int = field(default_factory=lambda: _env_int("CROSS_WIKI_WINDOW_MINUTES", 60))
 
     db_path: str = field(default_factory=lambda: os.getenv("DB_PATH", "data/wikiproof.db").strip())

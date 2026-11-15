@@ -1,0 +1,1311 @@
+<!DOCTYPE html>
+<html lang="en" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>WikiProof — Live Wikipedia Forensic Intelligence</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Plus+Jakarta+Sans:wght@600;700&display=swap" rel="stylesheet" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            display: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
+            sans: ['"DM Sans"', 'system-ui', 'sans-serif'],
+            mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
+          },
+        },
+      },
+    };
+  </script>
+  <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.14.3/dist/cdn.min.js"></script>
+  <script src="https://unpkg.com/vis-network/standalone/umd/vis-network.min.js"></script>
+  <style>
+    [x-cloak] { display: none !important; }
+    body { background-color: #090d16; color: #e2e8f0; }
+    .tabular-nums { font-variant-numeric: tabular-nums; }
+    ::-webkit-scrollbar { width: 8px; height: 8px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+  </style>
+</head>
+<body class="min-h-screen font-sans antialiased selection:bg-sky-500/30 selection:text-sky-100" x-data="wikiProofApp()" x-init="init()">
+
+  <a href="#main-content" class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-lg focus:bg-sky-600 focus:px-4 focus:py-2 focus:text-white">
+    Skip to content
+  </a>
+
+  <!-- Top Infrastructure & Navigation Bar -->
+  <header class="sticky top-0 z-30 border-b border-slate-800/90 bg-[#090d16]/95 backdrop-blur">
+    <!-- Top Status Strip -->
+    <div class="border-b border-slate-800/70 bg-slate-950/80 px-6 py-2">
+      <div class="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-4 text-xs text-slate-400">
+        <div class="flex items-center gap-3">
+          <span class="font-medium text-slate-200">Live on Hostinger VPS · Powered by Hostinger AI Router</span>
+          <span class="text-slate-600" aria-hidden="true">|</span>
+          <span class="font-mono text-[11px] text-slate-400" x-text="health.llm ? (health.llm.hostinger_configured ? 'Router: ' + health.llm.hostinger_model_slug : (health.llm.gemini_fallback_configured ? 'Fallback: ' + health.llm.gemini_model_slug : 'Mode: Deterministic + Fallback Ready')) : 'Checking AI Router...'"></span>
+        </div>
+        <div class="flex items-center gap-4 tabular-nums">
+          <div class="flex items-center gap-2">
+            <span class="inline-block h-2 w-2 rounded-full"
+                  :class="health.stream && health.stream.active ? 'bg-emerald-500' : 'bg-amber-500'"></span>
+            <span class="font-medium"
+                  :class="health.stream && health.stream.active ? 'text-emerald-400' : 'text-amber-400'"
+                  x-text="health.stream && health.stream.active ? 'Wikimedia SSE Connected' : 'Stream Connecting'"></span>
+          </div>
+          <span class="text-slate-600" aria-hidden="true">·</span>
+          <span>Processed: <strong class="font-mono text-slate-200" x-text="health.stream ? health.stream.events_processed : 0"></strong></span>
+          <span class="text-slate-600" aria-hidden="true">·</span>
+          <span>Cached Revisions: <strong class="font-mono text-slate-200" x-text="health.db_stats ? health.db_stats.cached_revisions : 0"></strong></span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main 3-Zone Header -->
+    <div class="mx-auto flex max-w-[1440px] items-center justify-between gap-6 px-6 py-3.5">
+      <!-- Zone 1: Brand -->
+      <a href="/" @click.prevent="switchTab('radar')" class="font-display text-xl font-bold tracking-tight text-white whitespace-nowrap shrink-0">
+        WikiProof
+      </a>
+
+      <!-- Zone 2: 4 Tab Controls -->
+      <nav class="flex items-center gap-1.5 overflow-x-auto rounded-lg border border-slate-800 bg-slate-900/90 p-1" aria-label="Primary sections">
+        <button @click="switchTab('radar')"
+                :aria-current="activeTab === 'radar' ? 'page' : null"
+                :class="activeTab === 'radar' ? 'bg-sky-600 text-white shadow-sm' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'"
+                class="rounded-md px-3.5 py-1.5 text-sm font-medium transition-colors whitespace-nowrap shrink-0">
+          Live Radar
+        </button>
+        <button @click="switchTab('inspector')"
+                :aria-current="activeTab === 'inspector' ? 'page' : null"
+                :class="activeTab === 'inspector' ? 'bg-sky-600 text-white shadow-sm' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'"
+                class="rounded-md px-3.5 py-1.5 text-sm font-medium transition-colors whitespace-nowrap shrink-0">
+          Revision Inspector
+        </button>
+        <button @click="switchTab('graph')"
+                :aria-current="activeTab === 'graph' ? 'page' : null"
+                :class="activeTab === 'graph' ? 'bg-sky-600 text-white shadow-sm' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'"
+                class="rounded-md px-3.5 py-1.5 text-sm font-medium transition-colors whitespace-nowrap shrink-0">
+          Citation &amp; Editor Graph
+        </button>
+        <button @click="switchTab('benchmark')"
+                :aria-current="activeTab === 'benchmark' ? 'page' : null"
+                :class="activeTab === 'benchmark' ? 'bg-sky-600 text-white shadow-sm' : 'text-slate-300 hover:text-white hover:bg-slate-800/80'"
+                class="rounded-md px-3.5 py-1.5 text-sm font-medium transition-colors whitespace-nowrap shrink-0">
+          Calibration &amp; Precision
+        </button>
+      </nav>
+
+      <!-- Zone 3: Primary Action -->
+      <div class="hidden md:flex items-center shrink-0">
+        <button @click="switchTab('inspector'); document.getElementById('inspect-input')?.focus()"
+                class="rounded-lg border border-sky-500/40 bg-sky-500/10 px-4 py-2 text-xs font-semibold text-sky-300 hover:bg-sky-500/20 transition-colors whitespace-nowrap shrink-0">
+          Inspect Wikipedia Diff
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main id="main-content" tabindex="-1" class="mx-auto max-w-[1440px] px-6 py-8">
+
+    <!-- =================================================================== -->
+    <!-- TAB 1: LIVE RADAR                                                   -->
+    <!-- =================================================================== -->
+    <section x-show="activeTab === 'radar'" x-cloak class="space-y-6">
+      <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <div>
+          <h1 class="font-display text-2xl font-bold tracking-tight text-white">Live Wikimedia Edit Radar</h1>
+          <p class="mt-1 text-sm text-slate-400">
+            Real-time non-bot article edits streamed across EN, FI, DE, RU, and SV Wikipedias and scored against behavioral signals and false-positive guardrails.
+          </p>
+          <p class="mt-2 text-xs text-slate-500">
+            Risk scores are triage signals, not proof: 0–29 low, 30–59 uncertain, 60–100 suspicious.
+          </p>
+        </div>
+
+        <!-- Filters & Auto-Refresh -->
+        <div class="flex flex-wrap items-center gap-3">
+          <div class="flex items-center gap-1 rounded-lg border border-slate-800 bg-slate-900 p-1" role="group" aria-label="Filter by Wikipedia language">
+            <template x-for="w in ['all', 'enwiki', 'fiwiki', 'dewiki', 'ruwiki', 'svwiki']" :key="w">
+              <button @click="radarWiki = w; loadLiveFeed()"
+                      :aria-pressed="radarWiki === w"
+                      :class="radarWiki === w ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'"
+                      class="rounded px-2.5 py-1 text-xs font-medium transition-colors whitespace-nowrap shrink-0"
+                      x-text="w === 'all' ? 'All Wikis' : w.replace('wiki', '').toUpperCase()">
+              </button>
+            </template>
+          </div>
+
+          <select x-model.number="radarMinScore" @change="loadLiveFeed()"
+                  aria-label="Minimum risk score"
+                  class="rounded-lg border border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-200 focus:border-sky-500 focus:outline-none">
+            <option value="0">All Risk Scores (0+)</option>
+            <option value="30">Uncertain &amp; Higher (30+)</option>
+            <option value="50">Elevated Risk (50+)</option>
+            <option value="60">High Risk Only (60+)</option>
+          </select>
+
+          <button @click="radarPropaganda = !radarPropaganda; loadLiveFeed()"
+                  :aria-pressed="radarPropaganda"
+                  :class="radarPropaganda ? 'border-rose-500/50 bg-rose-500/15 text-rose-200' : 'border-slate-700 bg-slate-900 text-slate-400'"
+                  class="rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0">
+            Propaganda only
+          </button>
+
+          <button @click="autoRefresh = !autoRefresh"
+                  :class="autoRefresh ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300' : 'border-slate-700 bg-slate-900 text-slate-400'"
+                  class="rounded-lg border px-3 py-1.5 text-xs font-medium transition-colors whitespace-nowrap shrink-0">
+            <span x-text="autoRefresh ? 'Auto-Refresh: On (4s)' : 'Auto-Refresh: Paused'"></span>
+          </button>
+
+          <button @click="loadLiveFeed()"
+                  class="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-200 hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0">
+            Refresh Now
+          </button>
+        </div>
+      </div>
+
+      <template x-if="liveError">
+        <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-rose-500/40 bg-rose-950/30 px-4 py-3 text-sm text-rose-200" role="alert">
+          <span x-text="liveError"></span>
+          <button @click="loadLiveFeed()" class="rounded-md border border-rose-400/40 px-3 py-1.5 font-medium text-rose-100 hover:bg-rose-900/50">
+            Try again
+          </button>
+        </div>
+      </template>
+
+      <!-- Live Feed Table -->
+      <div class="overflow-hidden rounded-xl border border-slate-800 bg-slate-900/60">
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-sm">
+            <thead class="border-b border-slate-800 bg-slate-950/70 text-xs font-semibold text-slate-400">
+              <tr>
+                <th class="px-4 py-3">Wiki / Time</th>
+                <th class="px-4 py-3">Article &amp; Edit Summary</th>
+                <th class="px-4 py-3">Editor</th>
+                <th class="px-4 py-3 text-right">Risk Score</th>
+                <th class="px-4 py-3">Classification</th>
+                <th class="px-4 py-3">Signals &amp; Domains</th>
+                <th class="px-4 py-3 text-right">Action</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800/80">
+              <template x-if="liveLoading && liveEvents.length === 0">
+                <tr>
+                  <td colspan="7" class="px-4 py-12 text-center text-sm text-slate-400">
+                    Loading live Wikimedia EventStreams feed...
+                  </td>
+                </tr>
+              </template>
+              <template x-if="!liveLoading && !liveError && liveEvents.length === 0">
+                <tr>
+                  <td colspan="7" class="px-4 py-12 text-center text-sm text-slate-400">
+                    <span x-text="radarPropaganda
+                      ? 'No recent edits have been flagged as propaganda. Only edits the AI has analyzed (risk 30+, or inspected manually) can be flagged.'
+                      : 'No edits match the current filter yet. The Wikimedia SSE stream is listening for incoming revisions.'"></span>
+                  </td>
+                </tr>
+              </template>
+              <template x-for="ev in liveEvents" :key="ev.wiki_domain + ':' + ev.rev_id">
+                <tr class="hover:bg-slate-800/40 transition-colors">
+                  <td class="px-4 py-3 align-top whitespace-nowrap">
+                    <div class="font-mono text-xs font-semibold text-sky-300" x-text="ev.wiki.replace('wiki', '').toUpperCase()"></div>
+                    <div class="mt-0.5 font-mono text-[11px] text-slate-400 tabular-nums" x-text="formatTime(ev.timestamp)"></div>
+                  </td>
+                  <td class="px-4 py-3 align-top max-w-md">
+                    <a :href="ev.diff_url" target="_blank" rel="noopener noreferrer"
+                       class="font-medium text-white hover:text-sky-300 transition-colors"
+                       x-text="ev.title"></a>
+                    <div class="mt-0.5 text-xs text-slate-400 line-clamp-2" x-text="ev.comment || '(no edit summary)'"></div>
+                  </td>
+                  <td class="px-4 py-3 align-top whitespace-nowrap">
+                    <div class="font-mono text-xs text-slate-200" x-text="ev.user"></div>
+                    <div class="mt-0.5 font-mono text-[11px] text-slate-500 tabular-nums" x-text="'rev ' + ev.rev_id"></div>
+                  </td>
+                  <td class="px-4 py-3 align-top text-right whitespace-nowrap">
+                    <span class="font-mono text-sm font-bold tabular-nums"
+                          :class="scoreTextClass(ev.risk_score)"
+                          x-text="ev.risk_score + '/100'"></span>
+                  </td>
+                  <td class="px-4 py-3 align-top whitespace-nowrap">
+                    <span class="inline-flex items-center rounded border px-2 py-0.5 text-xs font-semibold"
+                          :class="riskBadgeClass(ev.verdict || tierToLabel(ev.risk_tier))"
+                          x-text="ev.verdict || tierToLabel(ev.risk_tier)"></span>
+                    <template x-if="ev.propaganda && ev.propaganda.detected">
+                      <div class="mt-1.5 max-w-[14rem] whitespace-normal">
+                        <span class="inline-flex items-center rounded border border-rose-500/50 bg-rose-500/15 px-2 py-0.5 text-[11px] font-semibold text-rose-200"
+                              :title="ev.propaganda.narrative">Propaganda</span>
+                        <div class="mt-1 text-[11px] text-rose-200/80" x-show="ev.propaganda.techniques.length"
+                             x-text="ev.propaganda.techniques.join(' · ')"></div>
+                        <div class="mt-0.5 text-[11px] text-slate-400" x-show="ev.propaganda.favors"
+                             x-text="'Favors: ' + ev.propaganda.favors"></div>
+                      </div>
+                    </template>
+                  </td>
+                  <td class="px-4 py-3 align-top max-w-xs">
+                    <div class="space-y-1 text-xs">
+                      <template x-if="ev.triggered_signals && ev.triggered_signals.length > 0">
+                        <div class="text-slate-300" x-text="ev.triggered_signals.map(s => s.name).join(' · ')"></div>
+                      </template>
+                      <template x-if="(!ev.triggered_signals || ev.triggered_signals.length === 0) && ev.guardrails_applied && ev.guardrails_applied.length > 0">
+                        <div class="text-emerald-400/90" x-text="ev.guardrails_applied.map(g => g.name).join(' · ')"></div>
+                      </template>
+                      <template x-if="(!ev.triggered_signals || ev.triggered_signals.length === 0) && (!ev.guardrails_applied || ev.guardrails_applied.length === 0)">
+                        <div class="text-slate-500">No risk anomalies</div>
+                      </template>
+                      <template x-if="ev.added_domains && ev.added_domains.length > 0">
+                        <div class="font-mono text-[11px] text-amber-300" x-text="'Domains: ' + ev.added_domains.join(', ')"></div>
+                      </template>
+                    </div>
+                  </td>
+                  <td class="px-4 py-3 align-top text-right whitespace-nowrap">
+                    <button @click="inspectFromFeed(ev)"
+                            class="rounded-lg bg-sky-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-sky-500 transition-colors whitespace-nowrap shrink-0">
+                      Inspect with AI
+                    </button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- TAB 2: REVISION INSPECTOR (DEMO SANDBOX)                            -->
+    <!-- =================================================================== -->
+    <section x-show="activeTab === 'inspector'" x-cloak class="space-y-6">
+      <div>
+        <h1 class="font-display text-2xl font-bold tracking-tight text-white">Revision Inspector &amp; Forensic Sandbox</h1>
+        <p class="mt-1 text-sm text-slate-400">
+          Analyze any live or historical Wikipedia revision diff with deterministic behavioral scoring, guardrail checks, and Hostinger AI Router adjudication.
+        </p>
+      </div>
+
+      <!-- URL / RevID Input Form & 3 One-Click Presets -->
+      <div class="rounded-xl border border-slate-800 bg-slate-900/70 p-6 space-y-5">
+        <form @submit.prevent="submitInspect()" class="flex flex-col gap-3 lg:flex-row lg:items-end">
+          <div class="flex-1">
+            <label for="inspect-input" class="mb-1 block text-xs font-medium text-slate-300">Wikipedia diff URL or revision ID</label>
+            <input id="inspect-input"
+                   type="text"
+                   x-model="inspectInput"
+                   autocomplete="url"
+                   placeholder="Paste a diff URL or enter a revision ID"
+                   class="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-2.5 text-sm text-white placeholder-slate-500 focus:border-sky-500 focus:outline-none" />
+            <p class="mt-1 text-xs text-slate-500">For a revision ID, choose its Wikipedia language edition beside this field. URLs use the edition in the link.</p>
+          </div>
+          <div class="flex flex-col gap-1">
+            <label for="inspect-wiki" class="text-xs font-medium text-slate-300">Wiki for revision ID</label>
+            <select id="inspect-wiki" x-model="inspectWikiDomain"
+                    class="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2.5 text-sm text-slate-200 focus:border-sky-500 focus:outline-none">
+              <option value="en.wikipedia.org">English (EN)</option>
+              <option value="fi.wikipedia.org">Finnish (FI)</option>
+              <option value="de.wikipedia.org">German (DE)</option>
+              <option value="ru.wikipedia.org">Russian (RU)</option>
+              <option value="sv.wikipedia.org">Swedish (SV)</option>
+            </select>
+          </div>
+          <button type="submit"
+                  :disabled="inspectLoading"
+                  class="rounded-lg bg-sky-600 px-5 py-2.5 text-sm font-semibold text-white hover:bg-sky-500 disabled:opacity-50 transition-colors whitespace-nowrap shrink-0">
+            <span x-text="inspectLoading ? 'Analyzing Revision...' : 'Run Forensic Inspection'"></span>
+          </button>
+        </form>
+
+        <!-- 3 One-Click Real Preset Buttons -->
+        <div class="border-t border-slate-800/80 pt-4">
+          <div class="mb-2.5 text-xs font-medium text-slate-400">Real Cached Forensic Presets (Zero Mock Data):</div>
+          <div class="grid gap-3 md:grid-cols-3">
+            <button @click="loadPreset('true_positive')"
+                    class="flex items-center justify-between rounded-lg border border-rose-500/30 bg-rose-950/20 px-4 py-2.5 text-left text-xs font-semibold text-rose-200 hover:bg-rose-950/40 transition-colors">
+              <span class="truncate">1. True Positive: Citation Laundering</span>
+              <span class="ml-2 font-mono text-[11px] text-rose-400 shrink-0">Load</span>
+            </button>
+            <button @click="loadPreset('hard_negative')"
+                    class="flex items-center justify-between rounded-lg border border-emerald-500/30 bg-emerald-950/20 px-4 py-2.5 text-left text-xs font-semibold text-emerald-200 hover:bg-emerald-950/40 transition-colors">
+              <span class="truncate">2. Hard Negative: Legitimate Reuters Citation</span>
+              <span class="ml-2 font-mono text-[11px] text-emerald-400 shrink-0">Load</span>
+            </button>
+            <button @click="loadPreset('uncertain')"
+                    class="flex items-center justify-between rounded-lg border border-amber-500/30 bg-amber-950/20 px-4 py-2.5 text-left text-xs font-semibold text-amber-200 hover:bg-amber-950/40 transition-colors">
+              <span class="truncate">3. Edge Case: Uncertain Abstention</span>
+              <span class="ml-2 font-mono text-[11px] text-amber-400 shrink-0">Load</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Error Banner -->
+      <template x-if="inspectError">
+        <div class="rounded-xl border border-rose-500/40 bg-rose-950/40 px-5 py-4 text-sm text-rose-200" x-text="inspectError"></div>
+      </template>
+
+      <!-- Loading Skeleton -->
+      <template x-if="inspectLoading">
+        <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-8 text-center text-sm text-slate-400">
+          Fetching MediaWiki revision diff, resolving editor profile, scoring heuristics, and querying AI Router...
+        </div>
+      </template>
+
+      <!-- Forensic Dossier Display -->
+      <template x-if="dossier && !inspectLoading">
+        <div class="space-y-6">
+          <!-- Dossier Header & AI Verdict -->
+          <div class="grid gap-6 lg:grid-cols-12 items-stretch">
+            <!-- AI Verdict Card (7 cols) -->
+            <div class="lg:col-span-7 flex flex-col justify-between rounded-xl border border-slate-800 bg-slate-900/80 p-6">
+              <div>
+                <div class="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <div class="text-xs text-slate-400">
+                      <span x-text="dossier.wiki_domain"></span>
+                      <span aria-hidden="true"> · </span>
+                      <span class="font-mono tabular-nums" x-text="'rev ' + dossier.rev_id"></span>
+                      <span aria-hidden="true"> · </span>
+                      <span x-text="formatTime(dossier.timestamp)"></span>
+                    </div>
+                    <h2 class="mt-1 font-display text-xl font-bold text-white" x-text="dossier.title"></h2>
+                  </div>
+                  <div class="flex items-center gap-2.5">
+                    <span class="rounded border px-3 py-1 text-xs font-bold"
+                          :class="riskBadgeClass(dossier.llm_analysis.verdict)"
+                          x-text="dossier.llm_analysis.verdict"></span>
+                    <span class="font-mono text-xs text-slate-300 tabular-nums"
+                          x-text="Math.round((dossier.llm_analysis.confidence || 0) * 100) + '% confidence'"></span>
+                  </div>
+                </div>
+
+                <!-- Plain-English Explanation -->
+                <p class="mt-4 text-sm leading-relaxed text-slate-200" x-text="dossier.llm_analysis.explanation"></p>
+
+                <!-- Highlighted Verbatim Quote -->
+                <template x-if="dossier.llm_analysis.highlighted_quote">
+                  <div class="mt-4 rounded-lg border border-slate-700/80 bg-slate-950/90 p-3.5">
+                    <div class="text-[11px] font-semibold text-slate-400">Key Diff Evidence</div>
+                    <blockquote class="mt-1 font-mono text-xs text-amber-200 break-words" x-text="dossier.llm_analysis.highlighted_quote"></blockquote>
+                  </div>
+                </template>
+
+                <!-- Propaganda Assessment -->
+                <template x-if="dossier.llm_analysis.propaganda && dossier.llm_analysis.propaganda.assessed">
+                  <div class="mt-4 rounded-lg border p-3.5"
+                       :class="dossier.llm_analysis.propaganda.detected ? 'border-rose-500/40 bg-rose-950/30' : 'border-slate-700/80 bg-slate-950/60'">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                      <span class="text-[11px] font-semibold text-slate-400">Propaganda Assessment</span>
+                      <span class="rounded border px-2 py-0.5 text-[11px] font-bold"
+                            :class="dossier.llm_analysis.propaganda.detected ? 'border-rose-500/50 text-rose-300' : 'border-slate-600 text-slate-400'"
+                            x-text="dossier.llm_analysis.propaganda.detected ? 'Narrative push detected' : 'No propaganda detected'"></span>
+                    </div>
+                    <template x-if="dossier.llm_analysis.propaganda.detected">
+                      <div class="mt-2 space-y-1.5 text-xs">
+                        <p class="text-slate-200" x-show="dossier.llm_analysis.propaganda.narrative" x-text="dossier.llm_analysis.propaganda.narrative"></p>
+                        <p x-show="dossier.llm_analysis.propaganda.favors">
+                          <span class="text-slate-500">Favors:</span>
+                          <span class="font-medium text-slate-200" x-text="dossier.llm_analysis.propaganda.favors"></span>
+                        </p>
+                        <div class="flex flex-wrap gap-1.5 pt-0.5">
+                          <template x-for="t in dossier.llm_analysis.propaganda.techniques" :key="t">
+                            <span class="rounded bg-rose-500/15 px-2 py-0.5 text-[11px] font-medium text-rose-200" x-text="t"></span>
+                          </template>
+                        </div>
+                      </div>
+                    </template>
+                  </div>
+                </template>
+              </div>
+
+              <div class="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-4 text-xs text-slate-400">
+                <div class="flex flex-wrap items-center gap-2">
+                  <span class="text-slate-500">Techniques:</span>
+                  <template x-if="dossier.llm_analysis.techniques && dossier.llm_analysis.techniques.length > 0">
+                    <span class="font-medium text-rose-300" x-text="dossier.llm_analysis.techniques.join(' · ')"></span>
+                  </template>
+                  <template x-if="!dossier.llm_analysis.techniques || dossier.llm_analysis.techniques.length === 0">
+                    <span class="text-slate-400">None flagged</span>
+                  </template>
+                </div>
+                <div class="flex items-center gap-3 font-mono text-[11px] text-slate-400">
+                  <span x-text="dossier.llm_analysis.provider + ' / ' + dossier.llm_analysis.model"></span>
+                  <a :href="dossier.diff_url" target="_blank" rel="noopener noreferrer" class="text-sky-400 hover:text-sky-300">Open on Wikipedia ↗</a>
+                </div>
+              </div>
+            </div>
+
+            <!-- Editor Profile & Risk Score Summary (5 cols) -->
+            <div class="lg:col-span-5 flex flex-col justify-between rounded-xl border border-slate-800 bg-slate-900/80 p-6">
+              <div>
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-semibold text-slate-400">Behavioral Risk Score</span>
+                  <span class="font-mono text-3xl font-bold tabular-nums"
+                        :class="scoreTextClass(dossier.heuristics.score)"
+                        x-text="dossier.heuristics.score + '/100'"></span>
+                </div>
+
+                <!-- Score Meter -->
+                <div class="mt-3 h-2 w-full overflow-hidden rounded-full bg-slate-800">
+                  <div class="h-full transition-all duration-300"
+                       :class="dossier.heuristics.score >= 60 ? 'bg-rose-500' : (dossier.heuristics.score >= 30 ? 'bg-amber-500' : 'bg-emerald-500')"
+                       :style="'width: ' + dossier.heuristics.score + '%'"></div>
+                </div>
+
+                <!-- Editor Metadata Grid -->
+                <dl class="mt-5 grid grid-cols-2 gap-4 border-t border-slate-800 pt-4 text-xs">
+                  <div>
+                    <dt class="text-slate-400">Editor</dt>
+                    <dd class="mt-0.5 font-mono font-semibold text-white truncate" x-text="dossier.user_profile.username"></dd>
+                  </div>
+                  <div>
+                    <dt class="text-slate-400">Total Edits</dt>
+                    <dd class="mt-0.5 font-mono font-semibold text-white tabular-nums" x-text="(dossier.user_profile.editcount || 0).toLocaleString()"></dd>
+                  </div>
+                  <div>
+                    <dt class="text-slate-400">Account Age</dt>
+                    <dd class="mt-0.5 font-mono font-semibold text-white tabular-nums" x-text="Math.round(dossier.user_profile.age_days || 0) + ' days'"></dd>
+                  </div>
+                  <div>
+                    <dt class="text-slate-400">Diff Delta</dt>
+                    <dd class="mt-0.5 font-mono font-semibold tabular-nums">
+                      <span class="text-emerald-400" x-text="'+' + (dossier.diff.added_chars || 0)"></span>
+                      <span class="text-slate-600"> / </span>
+                      <span class="text-rose-400" x-text="'-' + (dossier.diff.deleted_chars || 0)"></span>
+                    </dd>
+                  </div>
+                </dl>
+
+                <div class="mt-4 border-t border-slate-800 pt-3 text-xs">
+                  <span class="text-slate-400">Edit Summary: </span>
+                  <span class="text-slate-200" x-text="dossier.comment || '(empty edit summary)'"></span>
+                </div>
+              </div>
+
+              <template x-if="dossier.diff.added_domains && dossier.diff.added_domains.length > 0">
+                <div class="mt-4 border-t border-slate-800 pt-3 text-xs">
+                  <div class="text-slate-400">Newly Added External Domains</div>
+                  <div class="mt-1 font-mono text-amber-300 break-all" x-text="dossier.diff.added_domains.join(', ')"></div>
+                </div>
+              </template>
+            </div>
+          </div>
+
+          <!-- Behavioral Signals vs False-Positive Guardrails -->
+          <div class="grid gap-6 md:grid-cols-2">
+            <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+              <h3 class="text-sm font-semibold text-white">Triggered Behavioral Risk Signals</h3>
+              <div class="mt-3 space-y-2.5">
+                <template x-if="!dossier.heuristics.triggered_signals || dossier.heuristics.triggered_signals.length === 0">
+                  <p class="text-xs text-slate-400">No behavioral risk signals triggered on this revision.</p>
+                </template>
+                <template x-for="sig in dossier.heuristics.triggered_signals" :key="sig.id">
+                  <div class="rounded-lg border border-rose-500/20 bg-rose-950/15 p-3">
+                    <div class="flex items-center justify-between text-xs font-semibold">
+                      <span class="text-rose-200" x-text="sig.name"></span>
+                      <span class="font-mono text-rose-400 tabular-nums" x-text="'+' + sig.weight"></span>
+                    </div>
+                    <p class="mt-1 text-xs text-slate-300" x-text="sig.detail"></p>
+                  </div>
+                </template>
+              </div>
+            </div>
+
+            <div class="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
+              <h3 class="text-sm font-semibold text-white">False-Positive Guardrails Applied</h3>
+              <div class="mt-3 space-y-2.5">
+                <template x-if="!dossier.heuristics.guardrails_applied || dossier.heuristics.guardrails_applied.length === 0">
+                  <p class="text-xs text-slate-400">No mitigating guardrails applied.</p>
+                </template>
+                <template x-for="g in dossier.heuristics.guardrails_applied" :key="g.id">
+                  <div class="rounded-lg border border-emerald-500/20 bg-emerald-950/15 p-3">
+                    <div class="flex items-center justify-between text-xs font-semibold">
+                      <span class="text-emerald-200" x-text="g.name"></span>
+                      <span class="font-mono text-emerald-400 tabular-nums" x-text="g.adjustment"></span>
+                    </div>
+                    <p class="mt-1 text-xs text-slate-300" x-text="g.detail"></p>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+
+          <!-- Side-by-Side Color-Highlighted Diff -->
+          <div class="rounded-xl border border-slate-800 bg-slate-900/60 overflow-hidden">
+            <div class="flex items-center justify-between border-b border-slate-800 bg-slate-950/60 px-5 py-3">
+              <h3 class="text-sm font-semibold text-white">Side-by-Side Revision Diff</h3>
+              <span class="font-mono text-xs text-slate-400 tabular-nums"
+                    x-text="(dossier.diff.deleted_lines?.length || 0) + ' deleted lines · ' + (dossier.diff.added_lines?.length || 0) + ' added lines'"></span>
+            </div>
+            <template x-if="dossier.wiki_domain !== 'en.wikipedia.org'">
+              <div class="border-b border-slate-800 bg-slate-950/50 px-5 py-4">
+                <div class="text-xs font-semibold text-sky-300">English summary of the changes</div>
+                <p x-show="dossier.llm_analysis.diff_summary_en"
+                   class="mt-1 text-sm leading-relaxed text-slate-200"
+                   aria-live="polite"
+                   x-text="dossier.llm_analysis.diff_summary_en"></p>
+                <div x-show="!dossier.llm_analysis.diff_summary_en" class="mt-2 flex flex-wrap items-center justify-between gap-3">
+                  <p class="text-sm text-slate-400"
+                     role="status"
+                     aria-live="polite"
+                     x-text="summaryLoading ? 'Generating an English summary...' : (summaryError || 'No English summary is saved for this revision yet.')"></p>
+                  <button @click="generateEnglishSummary()"
+                          :disabled="summaryLoading"
+                          class="rounded-md border border-sky-500/40 px-3 py-1.5 text-xs font-medium text-sky-300 hover:bg-sky-500/10 disabled:opacity-50">
+                    <span x-text="summaryLoading ? 'Generating...' : (summaryError ? 'Retry summary' : 'Generate English summary')"></span>
+                  </button>
+                </div>
+                <p class="mt-1 text-xs text-slate-500">AI-generated summary; the original text is preserved below for verification.</p>
+              </div>
+            </template>
+            <div class="grid md:grid-cols-2 divide-y md:divide-y-0 md:divide-x divide-slate-800">
+              <!-- Deleted Column -->
+              <div class="p-4 bg-rose-950/10 max-h-[420px] overflow-y-auto">
+                <div class="mb-2 font-mono text-xs font-semibold text-rose-400">− Removed Content</div>
+                <template x-if="!dossier.diff.deleted_lines || dossier.diff.deleted_lines.length === 0">
+                  <p class="font-mono text-xs text-slate-500">(no text removed)</p>
+                </template>
+                <div class="space-y-1.5 font-mono text-xs leading-relaxed">
+                  <template x-for="(line, idx) in dossier.diff.deleted_lines" :key="'del-' + idx">
+                    <div class="rounded bg-rose-500/10 border border-rose-500/20 px-2.5 py-1.5 text-rose-100 break-words" x-text="'− ' + line"></div>
+                  </template>
+                </div>
+              </div>
+              <!-- Added Column -->
+              <div class="p-4 bg-emerald-950/10 max-h-[420px] overflow-y-auto">
+                <div class="mb-2 font-mono text-xs font-semibold text-emerald-400">+ Added Content</div>
+                <template x-if="!dossier.diff.added_lines || dossier.diff.added_lines.length === 0">
+                  <p class="font-mono text-xs text-slate-500">(no text added)</p>
+                </template>
+                <div class="space-y-1.5 font-mono text-xs leading-relaxed">
+                  <template x-for="(line, idx) in dossier.diff.added_lines" :key="'add-' + idx">
+                    <div class="rounded bg-emerald-500/10 border border-emerald-500/20 px-2.5 py-1.5 text-emerald-100 break-words" x-text="'+ ' + line"></div>
+                  </template>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </template>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- TAB 3: CITATION & EDITOR GRAPH                                      -->
+    <!-- =================================================================== -->
+    <section x-show="activeTab === 'graph'" x-cloak class="space-y-6">
+      <div class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <div>
+          <h1 class="font-display text-2xl font-bold tracking-tight text-white">Citation &amp; Editor Network Graph</h1>
+          <p class="mt-1 text-sm text-slate-400">
+            Interactive relationship map linking Wikipedia editors, edited articles, and injected external domains. Highlights multi-editor clusters targeting the same external domain.
+          </p>
+        </div>
+
+        <div class="flex flex-wrap items-center gap-3">
+          <label class="flex items-center gap-2 text-xs text-slate-300">
+            <span>Min Score:</span>
+            <input type="range" min="0" max="80" step="10" x-model.number="graphMinScore" @change="loadNetworkGraph()" class="accent-sky-500" />
+            <span class="font-mono w-7 text-right tabular-nums" x-text="graphMinScore"></span>
+          </label>
+          <button @click="loadNetworkGraph()"
+                  class="rounded-lg border border-slate-700 bg-slate-900 px-3.5 py-1.5 text-xs font-medium text-white hover:bg-slate-800 transition-colors whitespace-nowrap shrink-0">
+            Refresh Graph
+          </button>
+        </div>
+      </div>
+
+      <!-- Graph Stats & Multi-Editor Domain Cluster Alerts -->
+      <div class="grid gap-4 md:grid-cols-4 tabular-nums">
+        <div class="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+          <div class="text-xs text-slate-400">Editors Mapped</div>
+          <div class="mt-1 font-mono text-2xl font-bold text-sky-400" x-text="graphStats.editors || 0"></div>
+        </div>
+        <div class="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+          <div class="text-xs text-slate-400">Articles Connected</div>
+          <div class="mt-1 font-mono text-2xl font-bold text-white" x-text="graphStats.articles || 0"></div>
+        </div>
+        <div class="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+          <div class="text-xs text-slate-400">External Domains</div>
+          <div class="mt-1 font-mono text-2xl font-bold text-amber-400" x-text="graphStats.domains || 0"></div>
+        </div>
+        <div class="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+          <div class="text-xs text-slate-400">Total Graph Edges</div>
+          <div class="mt-1 font-mono text-2xl font-bold text-slate-200" x-text="graphStats.total_edges || 0"></div>
+        </div>
+      </div>
+
+      <div class="grid gap-6 lg:grid-cols-12 items-stretch">
+        <!-- Vis-Network Canvas -->
+        <div class="lg:col-span-8 rounded-xl border border-slate-800 bg-slate-950 overflow-hidden relative">
+          <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 bg-slate-900/80 px-4 py-2.5 text-xs text-slate-300">
+            <div class="flex items-center gap-4">
+              <span><strong class="text-sky-400">●</strong> Editor</span>
+              <span><strong class="text-slate-300">◆</strong> Article</span>
+              <span><strong class="text-amber-400">■</strong> External Domain</span>
+              <span><strong class="text-rose-400">■</strong> High-Risk / Clustered Node</span>
+            </div>
+            <span class="text-slate-400">Drag, zoom, or click a node to inspect</span>
+          </div>
+          <div id="network-canvas" class="h-[540px] w-full"></div>
+        </div>
+
+        <!-- Side Inspector & Cluster Detection -->
+        <div class="lg:col-span-4 flex flex-col gap-4">
+          <div class="rounded-xl border border-slate-800 bg-slate-900/70 p-5">
+            <h3 class="text-sm font-semibold text-white">Selected Node Details</h3>
+            <template x-if="!selectedGraphNode">
+              <p class="mt-2 text-xs text-slate-400">Click any editor, article, or external domain node in the graph to view risk score and linked revisions.</p>
+            </template>
+            <template x-if="selectedGraphNode">
+              <div class="mt-3 space-y-2.5 text-xs">
+                <div class="flex items-center justify-between">
+                  <span class="text-slate-400">Type</span>
+                  <span class="font-mono font-semibold uppercase text-sky-300" x-text="selectedGraphNode.type"></span>
+                </div>
+                <div>
+                  <div class="text-slate-400">Identifier</div>
+                  <div class="mt-0.5 font-mono text-sm font-semibold text-white break-all" x-text="selectedGraphNode.label"></div>
+                </div>
+                <div class="flex items-center justify-between">
+                  <span class="text-slate-400">Peak Risk Score</span>
+                  <span class="font-mono font-bold tabular-nums" :class="scoreTextClass(selectedGraphNode.max_risk_score)" x-text="selectedGraphNode.max_risk_score + '/100'"></span>
+                </div>
+                <template x-if="selectedGraphNode.connectedEdges && selectedGraphNode.connectedEdges.length > 0">
+                  <div class="border-t border-slate-800 pt-2.5">
+                    <div class="text-slate-400 mb-1.5">Connected Revisions</div>
+                    <div class="space-y-1 max-h-40 overflow-y-auto">
+                      <template x-for="ce in selectedGraphNode.connectedEdges" :key="ce.id">
+                        <div class="flex items-center justify-between rounded bg-slate-950/70 px-2.5 py-1.5">
+                          <span class="truncate text-slate-200" x-text="ce.summary"></span>
+                          <button @click="inspectRev(selectedGraphNode.wiki_domain || 'en.wikipedia.org', ce.rev_id)"
+                                  class="ml-2 font-mono text-sky-400 hover:text-sky-300 shrink-0"
+                                  x-text="'rev ' + ce.rev_id"></button>
+                        </div>
+                      </template>
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </template>
+          </div>
+
+          <div class="rounded-xl border border-slate-800 bg-slate-900/70 p-5 flex-1">
+            <h3 class="text-sm font-semibold text-white">Coordinated Domain Clusters</h3>
+            <p class="mt-1 text-xs text-slate-400">Domains linked across multiple editors or elevated-risk revisions.</p>
+            <div class="mt-3 space-y-2 max-h-64 overflow-y-auto">
+              <template x-if="domainClusters.length === 0">
+                <p class="text-xs text-slate-500">No multi-editor domain clusters observed at the current filter threshold.</p>
+              </template>
+              <template x-for="cl in domainClusters" :key="cl.domain">
+                <div class="rounded-lg border p-3 text-xs"
+                     :class="cl.editors.length >= 2 || cl.maxScore >= 50 ? 'border-rose-500/30 bg-rose-950/20' : 'border-slate-800 bg-slate-950/60'">
+                  <div class="flex items-center justify-between font-mono">
+                    <span class="font-semibold text-white truncate" x-text="cl.domain"></span>
+                    <span class="tabular-nums font-bold" :class="scoreTextClass(cl.maxScore)" x-text="'Score ' + cl.maxScore"></span>
+                  </div>
+                  <div class="mt-1 text-slate-400" x-text="cl.editors.length + ' editor(s) · ' + cl.articles.length + ' article(s)'"></div>
+                </div>
+              </template>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- =================================================================== -->
+    <!-- TAB 4: CALIBRATION & PRECISION                                      -->
+    <!-- =================================================================== -->
+    <section x-show="activeTab === 'benchmark'" x-cloak class="space-y-6">
+      <div class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+        <div>
+          <h1 class="font-display text-2xl font-bold tracking-tight text-white">Benchmark Calibration &amp; Precision</h1>
+          <p class="mt-1 text-sm text-slate-400">
+            Evaluated against real historical Wikipedia revisions (reverted COI/link-injection edits vs. clean Featured Article volunteer edits).
+          </p>
+        </div>
+
+        <!-- Interactive Threshold Slider -->
+        <div class="rounded-xl border border-slate-800 bg-slate-900/90 px-5 py-3.5 flex items-center gap-4">
+          <div>
+            <div class="text-xs font-semibold text-slate-300">Risk Threshold Slider</div>
+            <div class="text-[11px] text-slate-400">Flag edits scoring &ge; threshold</div>
+          </div>
+          <input type="range" min="10" max="90" step="5"
+                 x-model.number="benchThreshold"
+                 @input="loadBenchmark()"
+                 class="w-40 accent-sky-500" />
+          <span class="font-mono text-xl font-bold text-sky-400 tabular-nums w-10 text-right" x-text="benchThreshold"></span>
+        </div>
+      </div>
+
+      <!-- KPI Strip -->
+      <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-5 tabular-nums">
+        <div class="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+          <div class="text-xs text-slate-400">Precision</div>
+          <div class="mt-1 font-mono text-2xl font-bold text-emerald-400" x-text="pct(benchmark.metrics?.precision)"></div>
+        </div>
+        <div class="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+          <div class="text-xs text-slate-400">Recall</div>
+          <div class="mt-1 font-mono text-2xl font-bold text-sky-400" x-text="pct(benchmark.metrics?.recall)"></div>
+        </div>
+        <div class="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+          <div class="text-xs text-slate-400">F1 Score</div>
+          <div class="mt-1 font-mono text-2xl font-bold text-white" x-text="pct(benchmark.metrics?.f1)"></div>
+        </div>
+        <div class="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+          <div class="text-xs text-slate-400">False-Positive Rate</div>
+          <div class="mt-1 font-mono text-2xl font-bold"
+               :class="(benchmark.metrics?.false_positive_rate || 0) > 0.1 ? 'text-rose-400' : 'text-emerald-400'"
+               x-text="pct(benchmark.metrics?.false_positive_rate)"></div>
+        </div>
+        <div class="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+          <div class="text-xs text-slate-400">Accuracy</div>
+          <div class="mt-1 font-mono text-2xl font-bold text-slate-200" x-text="pct(benchmark.metrics?.accuracy)"></div>
+        </div>
+      </div>
+
+      <!-- 2x2 Confusion Matrix + Threshold Sweep -->
+      <div class="grid gap-6 lg:grid-cols-12">
+        <!-- 2x2 Confusion Matrix -->
+        <div class="lg:col-span-6 rounded-xl border border-slate-800 bg-slate-900/70 p-5">
+          <div class="flex items-center justify-between">
+            <h2 class="text-sm font-semibold text-white">Confusion Matrix (n = <span class="font-mono tabular-nums" x-text="benchmark.total_cases || 0"></span>)</h2>
+            <span class="font-mono text-xs text-slate-400 tabular-nums" x-text="'Threshold >= ' + benchThreshold"></span>
+          </div>
+
+          <div class="mt-4 grid grid-cols-3 gap-2 text-center text-xs">
+            <div></div>
+            <div class="py-1 font-semibold text-slate-300">Predicted Suspicious</div>
+            <div class="py-1 font-semibold text-slate-300">Predicted Benign</div>
+
+            <div class="flex items-center justify-end pr-3 font-semibold text-slate-300">Actual Suspicious</div>
+            <div class="rounded-lg border border-emerald-500/30 bg-emerald-950/30 p-4">
+              <div class="text-[11px] font-semibold text-emerald-300">True Positive (TP)</div>
+              <div class="mt-1 font-mono text-3xl font-bold text-white tabular-nums" x-text="benchmark.confusion_matrix?.tp ?? 0"></div>
+            </div>
+            <div class="rounded-lg border border-amber-500/30 bg-amber-950/30 p-4">
+              <div class="text-[11px] font-semibold text-amber-300">False Negative (FN)</div>
+              <div class="mt-1 font-mono text-3xl font-bold text-white tabular-nums" x-text="benchmark.confusion_matrix?.fn ?? 0"></div>
+            </div>
+
+            <div class="flex items-center justify-end pr-3 font-semibold text-slate-300">Actual Benign</div>
+            <div class="rounded-lg border border-rose-500/30 bg-rose-950/30 p-4">
+              <div class="text-[11px] font-semibold text-rose-300">False Positive (FP)</div>
+              <div class="mt-1 font-mono text-3xl font-bold text-white tabular-nums" x-text="benchmark.confusion_matrix?.fp ?? 0"></div>
+            </div>
+            <div class="rounded-lg border border-sky-500/30 bg-sky-950/30 p-4">
+              <div class="text-[11px] font-semibold text-sky-300">True Negative (TN)</div>
+              <div class="mt-1 font-mono text-3xl font-bold text-white tabular-nums" x-text="benchmark.confusion_matrix?.tn ?? 0"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Threshold Sweep Table -->
+        <div class="lg:col-span-6 rounded-xl border border-slate-800 bg-slate-900/70 p-5">
+          <h2 class="text-sm font-semibold text-white">Threshold Calibration Sweep</h2>
+          <p class="mt-1 text-xs text-slate-400">Click any calibration row to snap the threshold slider to that operating point.</p>
+          <div class="mt-4 overflow-x-auto">
+            <table class="w-full text-left text-xs tabular-nums">
+              <thead class="border-b border-slate-800 text-slate-400">
+                <tr>
+                  <th class="py-2 pr-3">Threshold</th>
+                  <th class="py-2 px-2 text-right">TP / FP / TN / FN</th>
+                  <th class="py-2 px-2 text-right">Precision</th>
+                  <th class="py-2 px-2 text-right">Recall</th>
+                  <th class="py-2 px-2 text-right">F1</th>
+                  <th class="py-2 pl-2 text-right">FPR</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-800/70 font-mono">
+                <template x-for="row in (benchmark.threshold_sweep || [])" :key="row.threshold">
+                  <tr @click="benchThreshold = row.threshold; loadBenchmark()"
+                      :class="benchThreshold === row.threshold ? 'bg-sky-500/10 text-white' : 'text-slate-300 hover:bg-slate-800/40'"
+                      class="cursor-pointer transition-colors">
+                    <td class="py-2.5 pr-3 font-semibold text-sky-300" x-text="row.threshold"></td>
+                    <td class="py-2.5 px-2 text-right" x-text="row.confusion_matrix.tp + ' / ' + row.confusion_matrix.fp + ' / ' + row.confusion_matrix.tn + ' / ' + row.confusion_matrix.fn"></td>
+                    <td class="py-2.5 px-2 text-right" x-text="pct(row.metrics.precision)"></td>
+                    <td class="py-2.5 px-2 text-right" x-text="pct(row.metrics.recall)"></td>
+                    <td class="py-2.5 px-2 text-right font-semibold" x-text="pct(row.metrics.f1)"></td>
+                    <td class="py-2.5 pl-2 text-right" x-text="pct(row.metrics.false_positive_rate)"></td>
+                  </tr>
+                </template>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Real Wikipedia Benchmark Cases Table -->
+      <div class="rounded-xl border border-slate-800 bg-slate-900/60 overflow-hidden">
+        <div class="border-b border-slate-800 bg-slate-950/60 px-5 py-3 flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-white">Real Historical Wikipedia Benchmark Dataset</h2>
+          <span class="text-xs text-slate-400">Every revision is fetched directly via MediaWiki Action API</span>
+        </div>
+        <div class="overflow-x-auto">
+          <table class="w-full text-left text-xs">
+            <thead class="border-b border-slate-800 bg-slate-950/40 text-slate-400">
+              <tr>
+                <th class="px-4 py-3">Outcome</th>
+                <th class="px-4 py-3">Ground Truth</th>
+                <th class="px-4 py-3 text-right">Score</th>
+                <th class="px-4 py-3">LLM Verdict</th>
+                <th class="px-4 py-3">Article &amp; Category</th>
+                <th class="px-4 py-3">Editor</th>
+                <th class="px-4 py-3 text-right">Inspect</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-800/80">
+              <template x-for="c in (benchmark.cases || [])" :key="c.case_id">
+                <tr class="hover:bg-slate-800/40 transition-colors">
+                  <td class="px-4 py-2.5 whitespace-nowrap">
+                    <span class="inline-block rounded border px-2 py-0.5 font-mono font-bold"
+                          :class="outcomeBadgeClass(c.outcome)"
+                          x-text="c.outcome"></span>
+                  </td>
+                  <td class="px-4 py-2.5 whitespace-nowrap text-slate-300" x-text="c.ground_truth_label === 1 ? 'Suspicious (Reverted)' : 'Benign (Volunteer)'"></td>
+                  <td class="px-4 py-2.5 text-right font-mono font-bold tabular-nums"
+                      :class="scoreTextClass(c.heuristic_score)"
+                      x-text="c.heuristic_score"></td>
+                  <td class="px-4 py-2.5 whitespace-nowrap">
+                    <span class="rounded border px-2 py-0.5 font-semibold"
+                          :class="riskBadgeClass(c.llm_verdict)"
+                          x-text="c.llm_verdict"></span>
+                  </td>
+                  <td class="px-4 py-2.5">
+                    <a :href="c.diff_url" target="_blank" rel="noopener noreferrer" class="font-medium text-white hover:text-sky-300" x-text="c.title"></a>
+                    <div class="text-[11px] text-slate-400" x-text="c.rationale"></div>
+                  </td>
+                  <td class="px-4 py-2.5 font-mono text-slate-300 whitespace-nowrap" x-text="c.user"></td>
+                  <td class="px-4 py-2.5 text-right whitespace-nowrap">
+                    <button @click="inspectRev(c.wiki_domain, c.rev_id)"
+                            class="rounded bg-slate-800 px-2.5 py-1 font-medium text-sky-300 hover:bg-slate-700 transition-colors">
+                      Open Diff
+                    </button>
+                  </td>
+                </tr>
+              </template>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <script>
+    function wikiProofApp() {
+      return {
+        activeTab: 'radar',
+        health: {},
+
+        // Live Radar state
+        liveEvents: [],
+        liveLoading: true,
+        liveError: null,
+        radarWiki: 'all',
+        radarMinScore: 0,
+        radarPropaganda: false,
+        autoRefresh: true,
+        refreshTimer: null,
+
+        // Revision Inspector state
+        inspectInput: '',
+        inspectWikiDomain: 'en.wikipedia.org',
+        inspectLoading: false,
+        inspectError: null,
+        summaryLoading: false,
+        summaryError: null,
+        dossier: null,
+        presetsCache: {},
+
+        // Graph state
+        graphMinScore: 0,
+        graphStats: {},
+        domainClusters: [],
+        selectedGraphNode: null,
+        visNetwork: null,
+        rawNetworkData: null,
+
+        // Benchmark state
+        benchThreshold: 50,
+        benchmark: {},
+
+        async init() {
+          await Promise.all([
+            this.loadHealth(),
+            this.loadLiveFeed(),
+            this.loadPresets(),
+            this.loadBenchmark(),
+          ]);
+
+          this.refreshTimer = setInterval(() => {
+            this.loadHealth();
+            if (this.autoRefresh && this.activeTab === 'radar') {
+              this.loadLiveFeed();
+            }
+          }, 4000);
+        },
+
+        switchTab(tab) {
+          this.activeTab = tab;
+          if (tab === 'graph') {
+            this.$nextTick(() => this.loadNetworkGraph());
+          } else if (tab === 'benchmark') {
+            this.loadBenchmark();
+          } else if (tab === 'radar') {
+            this.loadLiveFeed();
+          }
+        },
+
+        async loadHealth() {
+          try {
+            const res = await fetch('/api/health');
+            if (res.ok) {
+              this.health = await res.json();
+            }
+          } catch (_) {}
+        },
+
+        async loadLiveFeed() {
+          this.liveLoading = this.liveEvents.length === 0;
+          this.liveError = null;
+          try {
+            const params = new URLSearchParams({ limit: '50', min_score: String(this.radarMinScore) });
+            if (this.radarWiki !== 'all') {
+              params.set('wiki', this.radarWiki);
+            }
+            if (this.radarPropaganda) {
+              params.set('propaganda', 'true');
+            }
+            const res = await fetch('/api/live-feed?' + params.toString());
+            if (!res.ok) {
+              throw new Error(`Request failed (${res.status})`);
+            }
+            const data = await res.json();
+            this.liveEvents = data.events || [];
+          } catch {
+            this.liveError = 'Unable to load live edits. Check the connection and try again.';
+          } finally {
+            this.liveLoading = false;
+          }
+        },
+
+        async loadPresets() {
+          try {
+            const res = await fetch('/api/presets');
+            if (res.ok) {
+              const data = await res.json();
+              for (const item of (data.presets || [])) {
+                if (item.preset_key) {
+                  this.presetsCache[item.preset_key] = item;
+                }
+              }
+              if (!this.dossier && this.presetsCache.true_positive) {
+                this.dossier = this.presetsCache.true_positive;
+              }
+            }
+          } catch (_) {}
+        },
+
+        async loadPreset(key) {
+          this.activeTab = 'inspector';
+          this.inspectError = null;
+          if (this.presetsCache[key]) {
+            this.dossier = this.presetsCache[key];
+            this.inspectInput = this.dossier.diff_url || String(this.dossier.rev_id);
+            this.inspectWikiDomain = this.dossier.wiki_domain || 'en.wikipedia.org';
+            return;
+          }
+          await this.loadPresets();
+          if (this.presetsCache[key]) {
+            this.dossier = this.presetsCache[key];
+            this.inspectInput = this.dossier.diff_url || String(this.dossier.rev_id);
+          }
+        },
+
+        async submitInspect() {
+          const raw = (this.inspectInput || '').trim();
+          if (!raw) {
+            this.inspectError = 'Enter a Wikipedia diff URL or numeric revision ID.';
+            return;
+          }
+          const payload = /^\d+$/.test(raw)
+            ? { wiki_domain: this.inspectWikiDomain, rev_id: Number(raw) }
+            : { url: raw };
+
+          await this.runInspectPayload(payload);
+        },
+
+        async inspectFromFeed(ev) {
+          this.activeTab = 'inspector';
+          this.inspectInput = ev.diff_url || String(ev.rev_id);
+          this.inspectWikiDomain = ev.wiki_domain;
+          await this.runInspectPayload({ wiki_domain: ev.wiki_domain, rev_id: ev.rev_id });
+        },
+
+        async inspectRev(wikiDomain, revId) {
+          this.activeTab = 'inspector';
+          this.inspectWikiDomain = wikiDomain || 'en.wikipedia.org';
+          this.inspectInput = `https://${this.inspectWikiDomain}/w/index.php?diff=${revId}`;
+          await this.runInspectPayload({ wiki_domain: this.inspectWikiDomain, rev_id: Number(revId) });
+        },
+
+        async runInspectPayload(payload) {
+          this.inspectLoading = true;
+          this.inspectError = null;
+          this.summaryError = null;
+          try {
+            const res = await fetch('/api/inspect', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+              throw new Error(data.detail || 'Inspection failed');
+            }
+            this.dossier = data;
+            this.inspectLoading = false;
+            if (
+              data.cached
+              && data.wiki_domain !== 'en.wikipedia.org'
+              && !data.llm_analysis.diff_summary_en
+            ) {
+              await this.generateEnglishSummary();
+            }
+          } catch (err) {
+            this.inspectError = err.message || 'Unable to inspect revision.';
+          } finally {
+            this.inspectLoading = false;
+          }
+        },
+
+        async generateEnglishSummary() {
+          if (!this.dossier || this.dossier.wiki_domain === 'en.wikipedia.org') return;
+          this.summaryLoading = true;
+          this.summaryError = null;
+          try {
+            const res = await fetch('/api/english-summary', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                wiki_domain: this.dossier.wiki_domain,
+                rev_id: this.dossier.rev_id,
+              }),
+            });
+            const data = await res.json();
+            if (!res.ok) {
+              throw new Error(data.detail || 'Unable to generate an English summary.');
+            }
+            this.dossier.llm_analysis.diff_summary_en = data.diff_summary_en;
+          } catch (err) {
+            this.summaryError = err.message || 'Unable to generate an English summary.';
+          } finally {
+            this.summaryLoading = false;
+          }
+        },
+
+        async loadNetworkGraph() {
+          try {
+            const res = await fetch(`/api/network?min_score=${this.graphMinScore}&limit=150`);
+            if (!res.ok) return;
+            const data = await res.json();
+            this.rawNetworkData = data;
+            this.graphStats = data.stats || {};
+            this.computeDomainClusters(data);
+            this.renderVisNetwork(data);
+          } catch (_) {}
+        },
+
+        computeDomainClusters(data) {
+          const edges = data.edges || [];
+          const nodesById = Object.fromEntries((data.nodes || []).map(n => [n.id, n]));
+          const byDomain = {};
+
+          // Map article -> editors
+          const articleEditors = {};
+          for (const e of edges) {
+            if (e.relation === 'edited') {
+              if (!articleEditors[e.target]) articleEditors[e.target] = new Set();
+              articleEditors[e.target].add(e.source);
+            }
+          }
+
+          for (const e of edges) {
+            if (e.relation === 'links_to') {
+              const domNode = nodesById[e.target];
+              const domLabel = domNode ? domNode.label : e.target;
+              if (!byDomain[domLabel]) {
+                byDomain[domLabel] = { domain: domLabel, editors: new Set(), articles: new Set(), maxScore: 0 };
+              }
+              byDomain[domLabel].articles.add(e.source);
+              byDomain[domLabel].maxScore = Math.max(byDomain[domLabel].maxScore, e.max_risk_score || 0);
+              for (const ed of (articleEditors[e.source] || [])) {
+                byDomain[domLabel].editors.add(ed);
+              }
+            }
+          }
+
+          this.domainClusters = Object.values(byDomain)
+            .map(item => ({
+              domain: item.domain,
+              editors: Array.from(item.editors),
+              articles: Array.from(item.articles),
+              maxScore: item.maxScore,
+            }))
+            .sort((a, b) => b.maxScore - a.maxScore || b.editors.length - a.editors.length);
+        },
+
+        renderVisNetwork(data) {
+          const container = document.getElementById('network-canvas');
+          if (!container || typeof vis === 'undefined') return;
+
+          const visNodes = (data.nodes || []).map(n => {
+            const score = n.max_risk_score || 0;
+            let color = '#38bdf8';
+            let shape = 'dot';
+            let size = 14;
+
+            if (n.type === 'editor') {
+              shape = 'dot';
+              size = 15;
+              color = score >= 60 ? '#f43f5e' : (score >= 30 ? '#f59e0b' : '#38bdf8');
+            } else if (n.type === 'article') {
+              shape = 'diamond';
+              size = 16;
+              color = score >= 60 ? '#fb7185' : '#94a3b8';
+            } else if (n.type === 'domain') {
+              shape = 'square';
+              size = 16;
+              color = score >= 50 ? '#ef4444' : (score >= 30 ? '#f59e0b' : '#10b981');
+            }
+
+            return {
+              id: n.id,
+              label: n.label.length > 26 ? n.label.slice(0, 24) + '…' : n.label,
+              title: `${n.type.toUpperCase()}: ${n.label} (Peak Risk: ${score}/100)`,
+              shape,
+              size,
+              color: {
+                background: color,
+                border: '#0f172a',
+                highlight: { background: '#ffffff', border: color },
+              },
+              font: { color: '#e2e8f0', size: 12, face: 'DM Sans' },
+              raw: n,
+            };
+          });
+
+          const visEdges = (data.edges || []).map((e, idx) => ({
+            id: 'edge-' + idx,
+            from: e.source,
+            to: e.target,
+            arrows: 'to',
+            color: {
+              color: e.max_risk_score >= 60 ? '#f43f5e' : (e.max_risk_score >= 30 ? '#f59e0b' : '#475569'),
+              opacity: 0.85,
+            },
+            width: Math.min(4, 1 + (e.weight || 1) * 0.6),
+            raw: e,
+          }));
+
+          const options = {
+            physics: {
+              stabilization: { iterations: 120 },
+              barnesHut: { gravitationalConstant: -3500, springLength: 130 },
+            },
+            interaction: { hover: true, tooltipDelay: 120 },
+          };
+
+          if (this.visNetwork) {
+            this.visNetwork.destroy();
+          }
+          this.visNetwork = new vis.Network(container, {
+            nodes: new vis.DataSet(visNodes),
+            edges: new vis.DataSet(visEdges),
+          }, options);
+
+          this.visNetwork.on('click', params => {
+            if (!params.nodes || params.nodes.length === 0) {
+              this.selectedGraphNode = null;
+              return;
+            }
+            const nodeId = params.nodes[0];
+            const nodeObj = (data.nodes || []).find(n => n.id === nodeId);
+            if (!nodeObj) return;
+
+            const connected = [];
+            let idx = 0;
+            for (const e of (data.edges || [])) {
+              if (e.source === nodeId || e.target === nodeId) {
+                const other = e.source === nodeId ? e.target : e.source;
+                const otherLabel = other.split(':').slice(1).join(':');
+                for (const rid of (e.rev_ids || [])) {
+                  connected.push({
+                    id: `${idx++}-${rid}`,
+                    summary: `${e.relation.replace('_', ' ')} ${otherLabel}`,
+                    rev_id: rid,
+                  });
+                }
+              }
+            }
+            this.selectedGraphNode = { ...nodeObj, connectedEdges: connected };
+          });
+        },
+
+        async loadBenchmark() {
+          try {
+            const res = await fetch(`/api/benchmark?threshold=${this.benchThreshold}`);
+            if (res.ok) {
+              this.benchmark = await res.json();
+            }
+          } catch (_) {}
+        },
+
+        formatTime(iso) {
+          if (!iso) return '—';
+          try {
+            const d = new Date(iso);
+            return d.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+          } catch (_) {
+            return iso;
+          }
+        },
+
+        pct(val) {
+          if (val === null || val === undefined) return '0.0%';
+          return (Number(val) * 100).toFixed(1) + '%';
+        },
+
+        tierToLabel(tier) {
+          if (tier === 'high') return 'Suspicious';
+          if (tier === 'medium') return 'Uncertain';
+          return 'Benign';
+        },
+
+        scoreTextClass(score) {
+          if (score >= 60) return 'text-rose-400';
+          if (score >= 30) return 'text-amber-400';
+          return 'text-emerald-400';
+        },
+
+        riskBadgeClass(label) {
+          if (label === 'Suspicious') return 'border-rose-500/40 bg-rose-950/50 text-rose-300';
+          if (label === 'Uncertain') return 'border-amber-500/40 bg-amber-950/50 text-amber-300';
+          return 'border-emerald-500/40 bg-emerald-950/50 text-emerald-300';
+        },
+
+        outcomeBadgeClass(outcome) {
+          if (outcome === 'TP') return 'border-emerald-500/40 bg-emerald-950/40 text-emerald-300';
+          if (outcome === 'TN') return 'border-sky-500/40 bg-sky-950/40 text-sky-300';
+          if (outcome === 'FP') return 'border-rose-500/40 bg-rose-950/40 text-rose-300';
+          return 'border-amber-500/40 bg-amber-950/40 text-amber-300';
+        },
+      };
+    }
+  </script>
+</body>
+</html>
